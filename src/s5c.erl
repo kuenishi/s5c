@@ -28,33 +28,13 @@
 %% API functions
 %%====================================================================
 
-%% my $usage = <<USAGE;
-%% Usage $0 --id friendly-name (or AWSAccessKeyId) [options] -- [curl-options] [URL]
-%%  options:
-%%   --key SecretAccessKey       id/key are AWSAcessKeyId and Secret (unsafe)
-%%   --contentType text/plain    set content-type header
-%%   --acl public-read           use a 'canned' ACL (x-amz-acl header)
-%%   --contentMd5 content_md5    add Content-MD5 header
-%%   --calculateContentMd5       calculate Content-MD5 and add it
-%%   --put <filename>            PUT request (from the provided local file)
-%%   --post [<filename>]         POST request (optional local file)
-%%   --copySrc bucket/key        Copy from this source key
-%%   --copySrcRange {startIndex}-{endIndex}
-%%   --createBucket [<region>]   create-bucket with optional location constraint
-%%   --head                      HEAD request
-%%   --debug                     enable debug logging
-%%  common curl options:
-%%   -H 'x-amz-acl: public-read' another way of using canned ACLs
-%%   -v                          verbose logging
-%% USAGE
-
 %% @doc s3curl --id foobar -put @file -- -s -v -x localhost:8080 http://s3.amazonaws.com/buckett/keyy -H 'x-maybe-foolish: true'
 curl(MetaOpts, URL, CurlOpts) ->
     Req0 = s5c_http:new_request(URL, CurlOpts),
     Req1 = s5c_http:update_meta(Req0, MetaOpts),
     Res = s5c_http:exec(Req1),
-    io:format("~p => ~p~n", [Req1, Res]).
-    %% {ok, Socket} = gen_tcp:open
+    io:format("~p => ~p~n", [Req1, Res]),
+    io:format("~s", [s5c_http:body(Res)]).
 
 connect(_, _, _) -> error. disconnect(_) -> error.
 
