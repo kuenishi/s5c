@@ -54,7 +54,7 @@ new_request(URL, CurlOpts) ->
     #request{
        dst_addr = ProxyHost, dst_port = ProxyPort,
        transport = Scheme, resource = Path,
-       bucket = Bucket, key = Path,
+       bucket = Bucket, key = Path, %% TODO: move up to s5n_s3
        headers = [{date, Date}, {host, Host}] ++ Header0
       }.
 

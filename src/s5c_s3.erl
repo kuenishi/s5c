@@ -32,7 +32,6 @@ sign(Req, ID) ->
                               ["AWS ", KeyId, $:, SignedString]}).
 
 
-
 %% @doc Version 2
 %% sign(_Req = #request{verb=Verb, headers=Hdrs,
 %%                      bucket=Bucket, key=Key},
