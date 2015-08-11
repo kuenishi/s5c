@@ -19,7 +19,9 @@ get_users(_Opts) ->
     Req = s5c_http:new_request(URL, [{header, "accept: application/json"},
                                      {proxy, "localhost:8080"}]),
     Req1 = s5c_http:update_meta(Req, [{id, local}]),
-    _Res = s5c_http:exec(Req1).
+    {ok, Conn} = s5c_http:send(Req1),
+    {ok, Res} = s5c_http:recv(Conn),
+    io:format("~p", [s5c_http:body(Res)]).
 
 create_user(_, _, _) -> ok.
 get_stats(_) -> ok.

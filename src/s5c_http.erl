@@ -1,6 +1,8 @@
 -module(s5c_http).
 
--export([new_request/2, update_meta/2, exec/1, body/1, verb/1]).
+-export([new_request/2, update_meta/2,
+         send/1, recv/1,
+         body/1, verb/1]).
 
 -record(request, {
           dst_addr :: inet:ip_address() | inet:hostname(),
@@ -65,40 +67,48 @@ update_meta(Req = #request{verb=Verb, headers=Hdrs,
     Req#request{headers=[{'Authorization',
                           ["AWS ", KeyId, $:, SignedString]}|Hdrs]}.
 
--spec exec(request()) -> {ok, response()} | {error, term()}.
-exec(Req = #request{dst_addr=Addr, dst_port=Port}) ->
+-spec send(request()) -> {ok, connection()}
+                             | {error, term()}.
+send(Req = #request{dst_addr=Addr, dst_port=Port}) ->
     Options = [binary, {active, false}],
     {ok, Socket} = gen_tcp:connect(Addr, Port, Options),
-    %% _Conn = #connection{socket=Socket, options=_Opt},
+    Conn = #connection{socket=Socket, options=Options},
     io:format("~s:~p <= ~s~n", [Addr, Port, req2hdr(Req)]),
-    ok = gen_tcp:send(Socket, req2hdr(Req)),
-    {all_header, Resp} = build_response(Socket, #response{}),
+    case gen_tcp:send(Socket, req2hdr(Req)) of
+        ok ->  {ok, Conn};
+        Err -> Err
+    end.
+
+-spec recv(connection()) -> {ok, response()} | {error, term()}.
+recv(#connection{socket=Socket}) ->
+    {ok, Resp} = build_response(Socket, #response{}),
     Resp1 = resume_all(Socket, Resp),
     ok = gen_tcp:close(Socket),
     Resp1.
 
-body(#response{body={raw,Body}}) ->
+body(#response{body=Body}) ->
     Body.
 
 %%====================================================================
 %% Internal functions
 %%====================================================================
 
+
 resume_all(Socket, #response{headers=Hdrs, body={raw, Body}} = Resp) ->
-    case proplists:get_value("Content-Length", Hdrs) of
+    case proplists:get_value('Content-Length', Hdrs) of
         undefined ->
-            case proplists:get_value("Transfer-Encoding", Hdrs) of
-                "chunked" ->
-                    Marker = proplists:get_value("Content-Type", Hdrs),
-                    "multipart/mixed; " ++ Termial = Marker,
-                    %% resume_chunks(Socket, Resp, Termial)
-                    {ok, Termial}
+            case proplists:get_value('Transfer-Encoding', Hdrs) of
+                <<"chunked">> ->
+                    Marker = proplists:get_value('Content-Type', Hdrs),
+                    <<"multipart/mixed; boundary=", Termial/binary>> = Marker,
+                    resume_chunks(Socket, Resp#response{body={chunked,[]}},
+                                  Body, <<"--", Termial/binary>>)
             end;
         LenStr ->
-            case list_to_integer(LenStr) of
+            case list_to_integer(binary_to_list(LenStr)) of
                 Len when Len =< byte_size(Body) ->
                     io:format("here>> ~p", [Len]),
-                    Resp;
+                    {ok, Resp};
                 _Len ->
                     {ok, Bin} = gen_tcp:recv(Socket, 0),
                     NewBody = <<Body/binary, Bin/binary>>,
@@ -107,46 +117,110 @@ resume_all(Socket, #response{headers=Hdrs, body={raw, Body}} = Resp) ->
             end
     end.
 
-%% resume_chunks(Socket, Resp = #response{body={raw, Body}}, Terminal) ->
-%%     %% Marker = proplists:get_value("Content-Type", Hdrs),
-%%     %% "multipart/mixed; " ++ Termial = Marker,
-%%     io:format("Multipart ...until ~p~n", [Terminal]),
-%%     {ok, Bin} = gen_tcp:recv(Socket, 0),
-%%     NewBody = <<Body/binary, Bin/binary>>,
-%%     io:format("here>> ~p", [NewBody]),
-%%     resume_all(Socket, Resp#response{body={raw, NewBody}}).
+resume_chunks(Socket, Resp, Data, Terminal) ->
+    %% Marker = proplists:get_value("Content-Type", Hdrs),
+    %% "multipart/mixed; " ++ Termial = Marker,
+    %% io:format("Multipart ...until ~p~n", [Terminal]),
+    {ok, Bin} = gen_tcp:recv(Socket, 0),
+    NewBody = <<Data/binary, Bin/binary>>,
+    handle_chunks(NewBody,
+                  Socket,
+                  Resp,
+                  Terminal).
+
+handle_chunks(Body, Socket, Resp = #response{body={chunked, Chunks}}, Terminal) ->
+    case binary:split(Body, Terminal, []) of
+        [<<$\r, $\n, Chunk/binary>>, L] ->
+            {ok, {_, _Bin} = C} = decode_chunk(Chunk, []),
+            %% io:format("Chunk. (~p)~n", [Bin]),
+            NewChunks = [C|Chunks],
+            handle_chunks(L, Socket, Resp#response{body={chunked,NewChunks}}, Terminal);
+
+        [<<"--", _Chunk/binary>> | _] ->
+            
+            {ok, Resp#response{body={chunked, lists:reverse(Chunks)}}};
+
+        [_Other, L] ->
+            %% io:format("Other. ~p~n", [Other]),
+            handle_chunks(L, Socket, Resp, Terminal);
+
+        [Body] ->
+            resume_chunks(Socket, Resp, Body, Terminal);
+
+        [] ->
+            resume_chunks(Socket, Resp, <<>>, Terminal)
+    end.
+
+decode_chunk(Chunk, Hdrs) ->
+    case erlang:decode_packet(httph_bin, Chunk, []) of
+        {ok, Packet, Rest} ->
+            case Packet of
+                {http_header, _, Key, _, Value} ->
+                    decode_chunk(Rest, [{Key,Value}|Hdrs]);
+                http_eoh ->
+                    {ok, {Hdrs, Rest}};
+                Error ->
+                    Error
+            end;
+        E ->
+            E
+    end.
 
 build_response(Socket, Res0) ->
     {ok, Data} = gen_tcp:recv(Socket, 0),
-    io:format("Resp: ~p~n", [Data]),
-    case parse_http_response(Data, Res0) of
-        {partial_header, Res} ->
-            build_response(Socket, Res);
-        Other ->
-            Other
-    end.
+    {ok, FirstPacket, Rest} = erlang:decode_packet(http_bin, Data, []),
+    {http_response, Vsn, Code, Status} = FirstPacket,
+    Res = Res0#response{code=Code,
+                        version=Vsn,
+                        status=Status},
+    build_response(Socket, Rest, Res).
 
-parse_http_response(Bin, Res = #response{headers=Hdrs0}) ->
-    case binary:split(Bin, <<"\r\n">>, []) of
-        [<<>>, Rest] ->
-            {all_header, Res#response{body={raw, Rest}}};
-        [<<"HTTP/", RestBin/binary>>, Rest] ->
-            %% Parse first line here
-            [Vsn, CodeMsg] = binary:split(RestBin, <<" ">>, []),
-            [Code, Msg] = binary:split(CodeMsg, <<" ">>, []),
-            Res1 = Res#response{code = list_to_integer(binary_to_list(Code)),
-                                version = Vsn,
-                                status = Msg},
-            parse_http_response(Rest, Res1);
-        [HeaderLine, Rest] ->
-            {K, V} = split(binary_to_list(HeaderLine), $:, ""),
-            Hdrs = [{string:strip(K),
-                     string:strip(V)}|Hdrs0],
-            parse_http_response(Rest,
-                                Res#response{headers=Hdrs});
-        [_PartialHeader] ->
-            {partial_header, Res}
+build_response(Socket, Data, Res0 = #response{headers=Hdrs}) ->
+    case erlang:decode_packet(httph_bin, Data, []) of
+        {ok, Packet, Rest} ->
+            case Packet of
+                {http_header, _, K, _, V} ->
+                    build_response(Socket, Rest,
+                                   Res0#response{headers=[{K,V}|Hdrs]});
+                http_eoh ->
+                    {ok, Res0#response{body={raw, Rest}}}
+            end;
+        {more, Length} ->
+            {ok, More} = gen_tcp:recv(Socket, Length),
+            MoarData = << Data/binary, More/binary >>,
+            build_response(Socket, MoarData, Res0);
+        Error ->
+            Error
     end.
+                                  
+    %% case parse_http_response(Data, Res0) of
+    %%     {partial_header, Res} ->
+    %%         build_response(Socket, Res);
+    %%     Other ->
+    %%         Other
+    %% end.
+
+%% parse_http_response(Bin, Res = #response{headers=Hdrs0}) ->
+%%     case binary:split(Bin, <<"\r\n">>, []) of
+%%         [<<>>, Rest] ->
+%%             {all_header, Res#response{body={raw, Rest}}};
+%%         [<<"HTTP/", RestBin/binary>>, Rest] ->
+%%             %% Parse first line here
+%%             [Vsn, CodeMsg] = binary:split(RestBin, <<" ">>, []),
+%%             [Code, Msg] = binary:split(CodeMsg, <<" ">>, []),
+%%             Res1 = Res#response{code = list_to_integer(binary_to_list(Code)),
+%%                                 version = Vsn,
+%%                                 status = Msg},
+%%             parse_http_response(Rest, Res1);
+%%         [HeaderLine, Rest] ->
+%%             {K, V} = split(binary_to_list(HeaderLine), $:, ""),
+%%             Hdrs = [{string:strip(K),
+%%                      string:strip(V)}|Hdrs0],
+%%             parse_http_response(Rest,
+%%                                 Res#response{headers=Hdrs});
+%%         [_PartialHeader] ->
+%%             {partial_header, Res}
+%%     end.
 
 %% http://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html
 req2hdr(#request{verb=Verb, resource=Path, headers=Hdrs}) ->
