@@ -1,6 +1,6 @@
 -module(s5c_s3).
 
--export([sign/5]).
+-export([sign/2]).
 %% http://docs.aws.amazon.com/AmazonS3/latest/API/APIRest.html
 %% For library
 -export([connect/3, disconnect/1,
@@ -18,6 +18,18 @@
          complete_multipart_upload/3, abort_multipart_upload/3, list_parts/2
 
         ]).
+
+-spec sign(s5c_http:request(), atom()) -> s5c_http:request().
+sign(Req, ID) ->
+    %% Authrize header
+    %% ID = proplists:get_value(id, MetaOpts),
+    {KeyId, KeySecret} = s5c_config:get(ID),
+    SignedString = sign(s5c_http:verb(Req),
+                        s5c_http:headers(Req),
+                        s5c_http:bucket(Req),
+                        s5c_http:key(Req), KeySecret),
+    s5c_http:add_header(Req, {'Authorization',
+                              ["AWS ", KeyId, $:, SignedString]}).
 
 
 
@@ -46,7 +58,7 @@ sign(Verb, Hdrs, Bucket, Key, KeySecret) ->
                       ContentType0 -> ContentType0
                   end,
     Resource = [$/, Bucket, Key],
-    STS = [s5c_http:verb(Verb), "\n",
+    STS = [Verb, "\n",
            CMD5,
            "\n",
            ContentType,

@@ -18,7 +18,7 @@ get_users(_Opts) ->
     URL = "http://riak-cs.s3.amazonaws.com/users",
     Req = s5c_http:new_request(URL, [{header, "accept: application/json"},
                                      {proxy, "localhost:8080"}]),
-    Req1 = s5c_http:update_meta(Req, [{id, local}]),
+    Req1 = s5c_s3:sign(Req, local),
     {ok, Conn} = s5c_http:send(Req1),
     {ok, Res} = s5c_http:recv(Conn),
     io:format("~p", [s5c_http:body(Res)]).

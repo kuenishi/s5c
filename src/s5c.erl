@@ -13,7 +13,8 @@
 %% @doc s3curl --id foobar -put @file -- -s -v -x localhost:8080 http://s3.amazonaws.com/buckett/keyy -H 'x-maybe-foolish: true'
 curl(MetaOpts, URL, CurlOpts) ->
     Req0 = s5c_http:new_request(URL, CurlOpts),
-    Req1 = s5c_http:update_meta(Req0, MetaOpts),
+    ID = proplists:get_value(id, MetaOpts),
+    Req1 = s5c_s3:sign(Req0, ID),
     {ok, Conn} = s5c_http:send(Req1),
     {ok, Res} = s5c_http:recv(Conn),
     %% io:format("~p => ~p~n", [Req1, Res]),

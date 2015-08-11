@@ -1,8 +1,10 @@
 -module(s5c_http).
 
--export([new_request/2, update_meta/2,
-         send/1, recv/1,
-         body/1, verb/1]).
+-export([new_request/2,
+         send/1, recv/1]).
+
+-export([verb/1, headers/1, bucket/1, key/1,
+         body/1, add_header/2]).
 
 -record(request, {
           dst_addr :: inet:ip_address() | inet:hostname(),
@@ -56,17 +58,6 @@ new_request(URL, CurlOpts) ->
        headers = [{date, Date}, {host, Host}] ++ Header0
       }.
 
--spec update_meta(request(), proplists:proplist()) -> request().
-update_meta(Req = #request{verb=Verb, headers=Hdrs,
-                           bucket=Bucket, key=Key},
-            MetaOpts) ->
-    %% Authrize header
-    ID = proplists:get_value(id, MetaOpts),
-    {KeyId, KeySecret} = s5c_config:get(ID),
-    SignedString = s5c_s3:sign(Verb, Hdrs, Bucket, Key, KeySecret),
-    Req#request{headers=[{'Authorization',
-                          ["AWS ", KeyId, $:, SignedString]}|Hdrs]}.
-
 -spec send(request()) -> {ok, connection()}
                              | {error, term()}.
 send(Req = #request{dst_addr=Addr, dst_port=Port}) ->
@@ -86,8 +77,16 @@ recv(#connection{socket=Socket}) ->
     ok = gen_tcp:close(Socket),
     Resp1.
 
-body(#response{body=Body}) ->
-    Body.
+verb(#request{verb=Verb}) ->  verb2bin(Verb).
+headers(#request{headers=Hdrs}) -> Hdrs.
+bucket(#request{bucket=Bucket}) -> Bucket.
+key(#request{key=Key}) -> Key.
+
+body(#response{body=Body}) ->  Body.
+
+add_header(Req = #request{headers=Hdrs}, {_, _} = Tuple) ->
+    Req#request{headers=[Tuple|Hdrs]}.
+
 
 %%====================================================================
 %% Internal functions
@@ -224,16 +223,16 @@ build_response(Socket, Data, Res0 = #response{headers=Hdrs}) ->
 
 %% http://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html
 req2hdr(#request{verb=Verb, resource=Path, headers=Hdrs}) ->
-    [verb(Verb), 32, Path, 32, <<"HTTP/1.1">>, $\r, $\n,
+    [verb2bin(Verb), 32, Path, 32, <<"HTTP/1.1">>, $\r, $\n,
      [ hdr2iolist(Hdr) || Hdr <- Hdrs ],
      $\r, $\n].
 
-verb(put) -> <<"PUT">>;
-verb(get) -> <<"GET">>;
-verb(options) -> <<"OPTIONS">>;
-verb(post) -> <<"POST">>;
-verb(delete) -> <<"DELETE">>;
-verb(head) -> <<"HEAD">>.
+verb2bin(put) -> <<"PUT">>;
+verb2bin(get) -> <<"GET">>;
+verb2bin(options) -> <<"OPTIONS">>;
+verb2bin(post) -> <<"POST">>;
+verb2bin(delete) -> <<"DELETE">>;
+verb2bin(head) -> <<"HEAD">>.
 
 hdr2iolist({Key, Value}) when is_atom(Key) ->
     [ atom_to_list(Key), $:, " ", Value, $\r, $\n];
