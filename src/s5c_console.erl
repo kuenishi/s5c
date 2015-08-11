@@ -31,6 +31,14 @@ main(["cmd", Args]) ->
 main(["cmd"|_]) ->
     getopt:usage(cmd_option_spec(), "s5c cmd", standard_io);
 
+main(["s2"]) ->
+    getopt:usage(s2_option_spec(), "s5c s2", standard_io);
+
+main(["s2"|Args]) ->
+    {ok, {S2Opts, Commands}} = getopt:parse(s2_option_spec(), Args),
+    Res = s5c_s2:main(Commands, S2Opts),
+    io:format("~p~n", [Res]);
+
 main(_) ->
     %% Arg0 = [ [["1234567890" || _ <- [1,2,3,4,5,6,7,8,9,0]], $\n]
     %%         || _ <- lists:seq(1, 20) ],
@@ -38,7 +46,7 @@ main(_) ->
     %% io:format("~p, ~p", [whereis(standard_error), process_info(whereis(standard_error))]),
     %% R = io:put_chars(standard_error, Arg),
     %% io:format("~p, ~p", [R, whereis(standard_error)]),
-    io:format(standard_error, "s5c [cmd [ARGS]|curl [ARGS]|generate]~n", []).
+    io:format(standard_error, "s5c [cmd [ARGS]|curl [ARGS]|generate|s2 [ARGS]]~n", []).
 
 
 %%====================================================================
@@ -97,5 +105,9 @@ curl_option_spec() ->
      {data, $d, "data", string, "body data"}].
 
 cmd_option_spec() ->
+    [{debug, $d, "debug", {boolean, false}, "debug"},
+     {config, $c, "config", {string, "~/.s3cfg"}, "config file"}].
+
+s2_option_spec() ->
     [{debug, $d, "debug", {boolean, false}, "debug"},
      {config, $c, "config", {string, "~/.s3cfg"}, "config file"}].

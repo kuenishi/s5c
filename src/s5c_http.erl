@@ -1,6 +1,6 @@
 -module(s5c_http).
 
--export([new_request/2, update_meta/2, exec/1, body/1]).
+-export([new_request/2, update_meta/2, exec/1, body/1, verb/1]).
 
 -record(request, {
           dst_addr :: inet:ip_address() | inet:hostname(),
@@ -40,22 +40,28 @@ new_request(URL, CurlOpts) ->
     {Scheme, Host, Port0, Bucket, Path} = decode_url(URL),
     io:format("~p", [CurlOpts]),
     {ProxyHost, ProxyPort} = case proplists:get_value(proxy, CurlOpts) of
-                       undefined -> {Host, Port0};
-                       HostPort -> host_port(HostPort, Port0)
-                   end,
+                                 undefined -> {Host, Port0};
+                                 HostPort -> host_port(HostPort, Port0)
+                             end,
+    Header0 = case proplists:get_value(header, CurlOpts) of
+                  undefined -> [];
+                  Header ->    [split(Header, $:, "")]
+              end,
     #request{
        dst_addr = ProxyHost, dst_port = ProxyPort,
        transport = Scheme, resource = Path,
        bucket = Bucket, key = Path,
-       headers = [{date, Date}, {host, Host}]
+       headers = [{date, Date}, {host, Host}] ++ Header0
       }.
 
 -spec update_meta(request(), proplists:proplist()) -> request().
-update_meta(Req = #request{headers=Hdrs}, MetaOpts) ->
+update_meta(Req = #request{verb=Verb, headers=Hdrs,
+                           bucket=Bucket, key=Key},
+            MetaOpts) ->
     %% Authrize header
     ID = proplists:get_value(id, MetaOpts),
     {KeyId, KeySecret} = s5c_config:get(ID),
-    SignedString = sign(Req, KeySecret),
+    SignedString = s5c_s3:sign(Verb, Hdrs, Bucket, Key, KeySecret),
     Req#request{headers=[{'Authorization',
                           ["AWS ", KeyId, $:, SignedString]}|Hdrs]}.
 
@@ -64,7 +70,7 @@ exec(Req = #request{dst_addr=Addr, dst_port=Port}) ->
     Options = [binary, {active, false}],
     {ok, Socket} = gen_tcp:connect(Addr, Port, Options),
     %% _Conn = #connection{socket=Socket, options=_Opt},
-    %% io:format("~s:~p <= ~s~n", [Addr, Port, req2hdr(Req)]),
+    io:format("~s:~p <= ~s~n", [Addr, Port, req2hdr(Req)]),
     ok = gen_tcp:send(Socket, req2hdr(Req)),
     {all_header, Resp} = build_response(Socket, #response{}),
     Resp1 = resume_all(Socket, Resp),
@@ -81,7 +87,13 @@ body(#response{body={raw,Body}}) ->
 resume_all(Socket, #response{headers=Hdrs, body={raw, Body}} = Resp) ->
     case proplists:get_value("Content-Length", Hdrs) of
         undefined ->
-            ok;
+            case proplists:get_value("Transfer-Encoding", Hdrs) of
+                "chunked" ->
+                    Marker = proplists:get_value("Content-Type", Hdrs),
+                    "multipart/mixed; " ++ Termial = Marker,
+                    %% resume_chunks(Socket, Resp, Termial)
+                    {ok, Termial}
+            end;
         LenStr ->
             case list_to_integer(LenStr) of
                 Len when Len =< byte_size(Body) ->
@@ -94,6 +106,15 @@ resume_all(Socket, #response{headers=Hdrs, body={raw, Body}} = Resp) ->
                     resume_all(Socket, Resp#response{body={raw, NewBody}})
             end
     end.
+
+%% resume_chunks(Socket, Resp = #response{body={raw, Body}}, Terminal) ->
+%%     %% Marker = proplists:get_value("Content-Type", Hdrs),
+%%     %% "multipart/mixed; " ++ Termial = Marker,
+%%     io:format("Multipart ...until ~p~n", [Terminal]),
+%%     {ok, Bin} = gen_tcp:recv(Socket, 0),
+%%     NewBody = <<Body/binary, Bin/binary>>,
+%%     io:format("here>> ~p", [NewBody]),
+%%     resume_all(Socket, Resp#response{body={raw, NewBody}}).
 
 build_response(Socket, Res0) ->
     {ok, Data} = gen_tcp:recv(Socket, 0),
@@ -143,7 +164,7 @@ verb(head) -> <<"HEAD">>.
 hdr2iolist({Key, Value}) when is_atom(Key) ->
     [ atom_to_list(Key), $:, " ", Value, $\r, $\n];
 hdr2iolist({Key, Value}) ->
-    [ Key, Value ].
+    [ Key, $:, " ", Value, $\r, $\n ].
 
 decode_url(URL) when is_binary(URL) ->
     decode_url(binary_to_list(URL));
@@ -182,47 +203,3 @@ split([Ch|Rest], Ch, Prefix) ->
 split([Ch|Rest], Ch0, Prefix) ->
     split(Rest, Ch0, [Ch|Prefix]).
 
-%% @doc Version 2
-sign(_Req = #request{verb=Verb, headers=Hdrs,
-                     bucket=Bucket, key=Key},
-     KeySecret) ->
-    Headers = normalize(Hdrs),
-    AmazonHeaders = extract_amazon_headers(Headers),
-    Date = case proplists:get_value("expires", Headers) of
-               undefined ->
-                   case proplists:is_defined("x-amz-date", Headers) of
-                       true ->  "\n";
-                       false -> [proplists:get_value(date, Headers), "\n"]
-                   end;
-               Expires ->
-                   Expires ++ "\n"
-           end,
-    CMD5 = case proplists:get_value("content-md5", Headers) of
-               undefined -> [];
-               CMD5_0 ->    CMD5_0
-           end,
-    ContentType = case proplists:get_value("content-type", Headers) of
-                      undefined -> [];
-                      ContentType0 -> ContentType0
-                  end,
-    Resource = [$/, Bucket, Key],
-    STS = [verb(Verb), "\n",
-           CMD5,
-           "\n",
-           ContentType,
-           "\n",
-           Date,
-           AmazonHeaders,
-           Resource],
-    %% _ = lager:debug("STS: ~p", [STS]),
-    io:format("~s~n", [STS]),
-    base64:encode_to_string(crypto:hmac(sha, KeySecret, STS)).
-
-normalize(Hdrs) ->
-    lists:map(fun({K, V}) when is_list(K) -> {string:to_lower(K), V};
-                 (Pair) -> Pair
-              end, Hdrs).
-
-extract_amazon_headers(Hdrs) ->
-    lists:filter(fun({"x-amz-" ++ _, _}) -> true;
-                    (_) -> false end, Hdrs).
