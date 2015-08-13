@@ -39,7 +39,11 @@ get_stats(_) -> ok.
 get_usage("", _Opts) ->
     error;
 get_usage(User, _Opts) when is_list(User) ->
-    URL = "http://riak-cs.s3.amazonaws.com/usage/" ++ User ++ "/bj",
+    Start = "20150801T000000Z",
+    %%Start = proplists:get(
+    End = "20150901T000000Z",
+    Path = filename:join(["/", User, "bj", Start, End]),
+    URL = "http://riak-cs.s3.amazonaws.com/usage/" ++ Path,
     Req = s5c_http:new_request(URL, [{header, "accept: application/json"},
                                      {proxy, "localhost:8080"}]),
     Req1 = s5c_s3:sign(Req, local),
