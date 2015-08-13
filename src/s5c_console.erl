@@ -36,8 +36,7 @@ main(["s2"]) ->
 
 main(["s2"|Args]) ->
     {ok, {S2Opts, Commands}} = getopt:parse(s2_option_spec(), Args),
-    Res = s5c_s2:main(Commands, S2Opts),
-    io:format("~p~n", [Res]);
+    s5c_s2:main(Commands, S2Opts);
 
 main(_) ->
     %% Arg0 = [ [["1234567890" || _ <- [1,2,3,4,5,6,7,8,9,0]], $\n]

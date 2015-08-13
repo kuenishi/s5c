@@ -21,8 +21,45 @@ get_users(_Opts) ->
     Req1 = s5c_s3:sign(Req, local),
     {ok, Conn} = s5c_http:send(Req1),
     {ok, Res} = s5c_http:recv(Conn),
-    io:format("~p", [s5c_http:body(Res)]).
+    {chunked, Chunks} = s5c_http:body(Res),
+    pp_header(Chunks),
+    [begin
+         case proplists:get_value('Content-Type', Hdrs) of
+             <<"application/json">> ->
+                 lists:foreach(fun pp_user/1,
+                               jsone:decode(Body));
+             _ ->
+                 pass
+         end
+     end || {Hdrs, Body} <- Chunks].
 
 create_user(_, _, _) -> ok.
 get_stats(_) -> ok.
-get_usage(_, _) -> ok. get_access(_, _) -> ok.
+
+get_usage("", _Opts) ->
+    error;
+get_usage(User, _Opts) when is_list(User) ->
+    URL = "http://riak-cs.s3.amazonaws.com/usage/" ++ User ++ "/bj",
+    Req = s5c_http:new_request(URL, [{header, "accept: application/json"},
+                                     {proxy, "localhost:8080"}]),
+    Req1 = s5c_s3:sign(Req, local),
+    {ok, Conn} = s5c_http:send(Req1),
+    {ok, Res} = s5c_http:recv(Conn),
+    io:format("~p", [s5c_http:body(Res)]).
+
+get_access(_, _) -> ok.
+
+
+%% Internal Functions
+
+pp_header([]) -> pass;
+pp_header(_Chunks) ->
+    io:format("~-20s\t~-10s\tname~n", [key_id, key_secret]).
+
+-spec pp_user({proplists:proplist()}) -> no_return().
+pp_user({User}) ->
+    %% io:format("~p~n", [User]),
+    KeyId = proplists:get_value(<<"key_id">>, User),
+    Name = proplists:get_value(<<"name">>, User),
+    KeySecret = proplists:get_value(<<"key_secret">>, User),
+    io:format("~-20s\t~-5s...\t~s~n", [KeyId, KeySecret, Name]).
