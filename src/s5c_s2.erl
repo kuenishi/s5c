@@ -34,7 +34,15 @@ get_users(_Opts) ->
      end || {Hdrs, Body} <- Chunks].
 
 create_user(_, _, _) -> ok.
-get_stats(_) -> ok.
+get_stats(_) ->
+    URL = "http://riak-cs.s3.amazonaws.com/stats",
+    Req = s5c_http:new_request(URL, [{header, "accept: application/json"},
+                                     {proxy, "localhost:8080"}]),
+    Req1 = s5c_s3:sign(Req, local),
+    {ok, Conn} = s5c_http:send(Req1),
+    {ok, Res} = s5c_http:recv(Conn),
+    {raw, Json} = s5c_http:body(Res),
+    io:format("~p", [jsone:decode(Json)]).
 
 get_usage("", _Opts) ->
     error;
