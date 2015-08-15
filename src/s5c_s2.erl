@@ -19,8 +19,10 @@ get_users(_Opts) ->
     Req = s5c_http:new_request(URL, [{header, "accept: application/json"},
                                      {proxy, "localhost:8080"}]),
     Req1 = s5c_s3:sign(Req, local),
-    {ok, Conn} = s5c_http:send(Req1),
+    {ok, Conn} = s5c_http:connect(Req1),
+    ok = s5c_http:send(Req1),
     {ok, Res} = s5c_http:recv(Conn),
+    ok = s5c_http:disconnect(Conn),
     {chunked, Chunks} = s5c_http:body(Res),
     pp_header(Chunks),
     [begin
@@ -55,7 +57,8 @@ get_usage(User, _Opts) when is_list(User) ->
     Req = s5c_http:new_request(URL, [{header, "accept: application/json"},
                                      {proxy, "localhost:8080"}]),
     Req1 = s5c_s3:sign(Req, local),
-    {ok, Conn} = s5c_http:send(Req1),
+    {ok, Conn} = s5c_http:connect(Req),
+    ok = s5c_http:send(Conn, Req1),
     {ok, Res} = s5c_http:recv(Conn),
     io:format("~p", [s5c_http:body(Res)]).
 

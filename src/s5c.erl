@@ -15,8 +15,10 @@ curl(MetaOpts, URL, CurlOpts) ->
     Req0 = s5c_http:new_request(URL, CurlOpts),
     ID = proplists:get_value(id, MetaOpts),
     Req1 = s5c_s3:sign(Req0, ID),
-    {ok, Conn} = s5c_http:send(Req1),
+    {ok, Conn} = s5c_http:connect(Req1),
+    ok = s5c_http:send(Conn, Req1),
     {ok, Res} = s5c_http:recv(Conn),
+    ok = s5c_http:close(Conn),
     %% io:format("~p => ~p~n", [Req1, Res]),
     {ok, s5c_http:body(Res)}.
 

@@ -3,7 +3,8 @@
 -export([sign/2]).
 %% http://docs.aws.amazon.com/AmazonS3/latest/API/APIRest.html
 %% For library
--export([connect/3, disconnect/1,
+-export([
+         get_service/1,
 
          %% Bucket API
          put_bucket/2, get_bucket/2, delete_bucket/2,
@@ -78,8 +79,8 @@ extract_amazon_headers(Hdrs) ->
     lists:filter(fun({"x-amz-" ++ _, _}) -> true;
                     (_) -> false end, Hdrs).
 
-
-connect(_, _, _) -> error. disconnect(_) -> error.
+get_service(Conn) ->
+    Conn.
 
 %% Bucket API
 put_bucket(_, _) -> error.

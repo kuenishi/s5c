@@ -1,7 +1,8 @@
 -module(s5c_http).
 
--export([new_request/2,
-         send/1, recv/1]).
+-export([connect/3, connect/1, disconnect/1,
+         new_request/2,
+         send/2, recv/1]).
 
 -export([verb/1, headers/1, bucket/1, key/1,
          body/1, add_header/2]).
@@ -29,6 +30,7 @@
          }).
 
 -record(connection, {
+          ssl = false :: boolean(),
           socket :: inet:socket(),
           options = [] :: proplists:proplist()
          }).
@@ -37,6 +39,29 @@
 -type response() :: #response{}.
 -type connection() :: #connection{}.
 -export_type([request/0, response/0, connection/0]).
+
+-spec connect(inet:ip_address() | inet:hostname(),
+              inet:port_number(),
+              proplist:proplist()) ->
+                     {ok, connection()} | {error, term()}.
+connect(Host, Port, Opts) ->
+    undefined = proplists:get_value(transport, Opts),
+    case gen_tcp:connect(Host, Port, Opts) of
+        {ok, Socket} ->
+            io:format("connecting ~s:~p~n", [Host, Port]),
+            {ok, #connection{socket=Socket, options=Opts}};
+        Error ->
+            Error
+    end.
+
+-spec connect(request()) -> {ok, connection()}
+                                | {error, term()}.
+connect(_Req = #request{dst_addr=Addr, dst_port=Port}) ->
+    Options = [binary, {active, false}],
+    connect(Addr, Port, Options).
+
+disconnect(_Conn = #connection{socket=Socket, ssl=false}) ->
+    ok = gen_tcp:close(Socket).    
 
 -spec new_request(string(), proplists:proplist()) -> request().
 new_request(URL, CurlOpts) ->
@@ -58,24 +83,14 @@ new_request(URL, CurlOpts) ->
        headers = [{date, Date}, {host, Host}] ++ Header0
       }.
 
--spec send(request()) -> {ok, connection()}
-                             | {error, term()}.
-send(Req = #request{dst_addr=Addr, dst_port=Port}) ->
-    Options = [binary, {active, false}],
-    {ok, Socket} = gen_tcp:connect(Addr, Port, Options),
-    Conn = #connection{socket=Socket, options=Options},
-    io:format("~s:~p <= ~s~n", [Addr, Port, req2hdr(Req)]),
-    case gen_tcp:send(Socket, req2hdr(Req)) of
-        ok ->  {ok, Conn};
-        Err -> Err
-    end.
+-spec send(connection(), request()) -> ok | {error, term()}.
+send(#connection{socket=Socket} = _Conn, Req) ->
+    gen_tcp:send(Socket, req2hdr(Req)).
 
 -spec recv(connection()) -> {ok, response()} | {error, term()}.
-recv(#connection{socket=Socket}) ->
+recv(#connection{socket=Socket} = _Conn) ->
     {ok, Resp} = build_response(Socket, #response{}),
-    Resp1 = resume_all(Socket, Resp),
-    ok = gen_tcp:close(Socket),
-    Resp1.
+    resume_all(Socket, Resp).
 
 verb(#request{verb=Verb}) ->  verb2bin(Verb).
 headers(#request{headers=Hdrs}) -> Hdrs.

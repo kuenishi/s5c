@@ -25,11 +25,18 @@ main(["curl"|Args]) ->
     Res = s5c:curl(S3CurlOpts, URL, CurlOpts),
     io:format("~p~n", [Res]);
 
-main(["cmd", Args]) ->
-    s5cmd:main(Args);
-
-main(["cmd"|_]) ->
+main(["cmd"]) ->
     getopt:usage(cmd_option_spec(), "s5c cmd", standard_io);
+
+main(["cmd"|Args]) ->
+    case getopt:parse(cmd_option_spec(), Args) of
+        {ok, {_Opts, ["help"|_]}} ->
+            main(["cmd"]);
+        {ok, {Opts, CmdArgs}} ->
+            s5cmd:main(CmdArgs, Opts);
+        {error, Reason} ->
+            exit(Reason)
+    end;
 
 main(["s2"]) ->
     getopt:usage(s2_option_spec(), "s5c s2", standard_io);
